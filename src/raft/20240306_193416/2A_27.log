@@ -1,0 +1,4 @@
+# 6.5840/raft
+# [6.5840/raft]
+./leaderSelection.go:74:9: 6.5840/raft.DPrintf call has arguments but no formatting directives
+FAIL	6.5840/raft [build failed]
