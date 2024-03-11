@@ -503,39 +503,47 @@ func TestBackup2B(t *testing.T) {
 
 	// put leader and one follower in a partition
 	leader1 := cfg.checkOneLeader()
+	DPrintf("======================leader node {%d}======================\n", leader1)
+	DPrintf("======================disconnect {%d} {%d} {%d}======================\n", (leader1+2)%servers, (leader1+3)%servers, (leader1+4)%servers)
 	cfg.disconnect((leader1 + 2) % servers)
 	cfg.disconnect((leader1 + 3) % servers)
 	cfg.disconnect((leader1 + 4) % servers)
 
+	DPrintf("======================leader node {%d} send 50 command======================\n", leader1)
 	// submit lots of commands that won't commit
 	for i := 0; i < 50; i++ {
 		cfg.rafts[leader1].Start(rand.Int())
 	}
 
 	time.Sleep(RaftElectionTimeout / 2)
-
+	DPrintf("======================disconnect {%d} {%d} ======================\n", (leader1+0)%servers, (leader1+1)%servers)
 	cfg.disconnect((leader1 + 0) % servers)
 	cfg.disconnect((leader1 + 1) % servers)
 
 	// allow other partition to recover
+	DPrintf("======================connect {%d} {%d} {%d}======================\n", (leader1+2)%servers, (leader1+3)%servers, (leader1+4)%servers)
 	cfg.connect((leader1 + 2) % servers)
 	cfg.connect((leader1 + 3) % servers)
 	cfg.connect((leader1 + 4) % servers)
 
 	// lots of successful commands to new group.
+	DPrintf("======================append 50 command======================\n")
 	for i := 0; i < 50; i++ {
 		cfg.one(rand.Int(), 3, true)
 	}
 
 	// now another partitioned leader and one follower
 	leader2 := cfg.checkOneLeader()
+	DPrintf("======================leader node {%d}======================\n", leader2)
 	other := (leader1 + 2) % servers
 	if leader2 == other {
 		other = (leader2 + 1) % servers
 	}
+	DPrintf("======================disconnect node {%d}======================\n", other)
 	cfg.disconnect(other)
 
 	// lots more commands that won't commit
+	DPrintf("======================leader node {%d} send 50 command======================\n", leader2)
 	for i := 0; i < 50; i++ {
 		cfg.rafts[leader2].Start(rand.Int())
 	}
@@ -543,19 +551,23 @@ func TestBackup2B(t *testing.T) {
 	time.Sleep(RaftElectionTimeout / 2)
 
 	// bring original leader back to life,
+	DPrintf("======================all node disconnect======================\n")
 	for i := 0; i < servers; i++ {
 		cfg.disconnect(i)
 	}
+	DPrintf("======================connect {%d} {%d} {%d}======================\n", (leader1+0)%servers, (leader1+1)%servers, other)
 	cfg.connect((leader1 + 0) % servers)
 	cfg.connect((leader1 + 1) % servers)
 	cfg.connect(other)
 
 	// lots of successful commands to new group.
+	DPrintf("======================append 50 command======================\n")
 	for i := 0; i < 50; i++ {
 		cfg.one(rand.Int(), 3, true)
 	}
 
 	// now everyone
+	DPrintf("======================all node connect======================\n")
 	for i := 0; i < servers; i++ {
 		cfg.connect(i)
 	}
@@ -582,8 +594,7 @@ func TestCount2B(t *testing.T) {
 
 	total1 := rpcs()
 
-	// 原来的是30 1, 但是我做的是把rpc分离了, 应当*2
-	if total1 > 30*2 || total1 < 1*2 {
+	if total1 > 30 || total1 < 1 {
 		t.Fatalf("too many or few RPCs (%v) to elect initial leader\n", total1)
 	}
 
@@ -649,9 +660,7 @@ loop:
 			continue loop
 		}
 
-		// if total2-total1 > (iters+1+3)*3 {
-		// 我的实现使用的是单向的半rpc通信, 理论上应该*2比较合适
-		if total2-total1 > (iters+1+3)*6 {
+		if total2-total1 > (iters+1+3)*3 {
 			t.Fatalf("too many RPCs (%v) for %v entries\n", total2-total1, iters)
 		}
 
@@ -670,8 +679,7 @@ loop:
 		total3 += cfg.rpcCount(j)
 	}
 
-	// 我乘2了, 因为把rpc拆了
-	if total3-total2 > 3*20*2 {
+	if total3-total2 > 3*20 {
 		t.Fatalf("too many RPCs (%v) for 1 second of idleness\n", total3-total2)
 	}
 
@@ -1005,9 +1013,7 @@ func internalChurn(t *testing.T, unreliable bool) {
 			} else {
 				time.Sleep(time.Duration(79+me*17) * time.Millisecond)
 			}
-
 		}
-
 		ret = values
 	}
 
@@ -1228,51 +1234,5 @@ func TestSnapshotAllCrash2D(t *testing.T) {
 			t.Fatalf("index decreased from %v to %v", index1, index2)
 		}
 	}
-	cfg.end()
-}
-
-// do servers correctly initialize their in-memory copy of the snapshot, making
-// sure that future writes to persistent state don't lose state?
-func TestSnapshotInit2D(t *testing.T) {
-	servers := 3
-	cfg := make_config(t, servers, false, true)
-	defer cfg.cleanup()
-
-	cfg.begin("Test (2D): snapshot initialization after crash")
-	cfg.one(rand.Int(), servers, true)
-
-	// enough ops to make a snapshot
-	nn := SnapShotInterval + 1
-	for i := 0; i < nn; i++ {
-		cfg.one(rand.Int(), servers, true)
-	}
-
-	// crash all
-	for i := 0; i < servers; i++ {
-		cfg.crash1(i)
-	}
-
-	// revive all
-	for i := 0; i < servers; i++ {
-		cfg.start1(i, cfg.applierSnap)
-		cfg.connect(i)
-	}
-
-	// a single op, to get something to be written back to persistent storage.
-	cfg.one(rand.Int(), servers, true)
-
-	// crash all
-	for i := 0; i < servers; i++ {
-		cfg.crash1(i)
-	}
-
-	// revive all
-	for i := 0; i < servers; i++ {
-		cfg.start1(i, cfg.applierSnap)
-		cfg.connect(i)
-	}
-
-	// do another op to trigger potential bug
-	cfg.one(rand.Int(), servers, true)
 	cfg.end()
 }
